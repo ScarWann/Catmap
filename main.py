@@ -4,7 +4,6 @@ from enum import Enum
 from numba import jit
 import numpy as np
 import pandas as pd
-from time import time
 
 
 MAX_ITERATIONS = 1000
@@ -12,7 +11,7 @@ MODES = Enum("MODE", "PERIODICITY_TO_START_GRADIENT PERIODICITY_TO_START PERIODI
 
 
 @jit(nopython = True)
-def periodicity_to_start_gradient(x_init, y_init, x_resolution, y_resolution):
+def periodicity_to_start_gradient(x_init: int, y_init: int, x_resolution: int, y_resolution: int) -> int:
     x = x_init
     y = y_init
     for i in range(MAX_ITERATIONS):
@@ -22,7 +21,7 @@ def periodicity_to_start_gradient(x_init, y_init, x_resolution, y_resolution):
     return -1
 
 @jit(nopython = True)
-def periodicity_to_start(x_init, y_init, x_resolution, y_resolution):
+def periodicity_to_start(x_init: int, y_init: int, x_resolution: int, y_resolution: int) -> int:
     x = x_init
     y = y_init
     for i in range(MAX_ITERATIONS):
@@ -31,8 +30,9 @@ def periodicity_to_start(x_init, y_init, x_resolution, y_resolution):
             return 1
     return -1
 
+
 @jit(nopython = True)
-def periodicity_partial_gradient_new(x, y, x_resolution, y_resolution):
+def periodicity_partial_gradient(x: int, y: int, x_resolution: int, y_resolution: int) -> int:
     visited = {}
     state = (x, y)
     visited[state] = 0
@@ -48,7 +48,7 @@ def periodicity_partial_gradient_new(x, y, x_resolution, y_resolution):
     return -1
 
 @jit(nopython = True)
-def periodicity_partial_new(x, y, x_resolution, y_resolution):
+def periodicity_partial(x: int, y: int, x_resolution: int, y_resolution: int) -> int:
     visited = {}
     state = (x, y)
     visited[state] = 0
@@ -63,28 +63,9 @@ def periodicity_partial_new(x, y, x_resolution, y_resolution):
         visited[state] = 0
     return -1
 
-@jit
-def periodicity_partial_gradient_old(x, y, x_resolution, y_resolution):
-    visited = [[x, y]]
-    for i in range(MAX_ITERATIONS):
-        x, y = (2 * x + y) % x_resolution, (x + y) % y_resolution
-        if [x, y] in visited:
-            return i - visited.index([x, y])
-        visited.append([x,y])
-    return -1
-
-@jit
-def periodicity_partial_old(x, y, x_resolution, y_resolution):
-    visited = [[x, y]]
-    for _ in range(MAX_ITERATIONS):
-        x, y = (2 * x + y) % x_resolution, (x + y) % y_resolution
-        if [x, y] in visited:
-            return 1
-        visited.append([x,y])
-    return -1
 
 @jit(nopython = True)
-def pixel_movement(x, y, x_resolution, y_resolution):
+def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int) -> list[list[int]]:
     matrix = np.zeros((x_resolution, y_resolution), int)
     for _ in range(MAX_ITERATIONS):
         x, y = (2 * x + y) % x_resolution, (x + y) % y_resolution
@@ -93,7 +74,7 @@ def pixel_movement(x, y, x_resolution, y_resolution):
 
 
 @jit(nopython = True)
-def apply_over_matrix(f, x_resolution, y_resolution):
+def apply_over_matrix(f: function, x_resolution: int, y_resolution: int) -> list[list[int]]:
     matrix = []
     for i in range(x_resolution):
         row = []
@@ -102,7 +83,7 @@ def apply_over_matrix(f, x_resolution, y_resolution):
         matrix.append(row)
     return matrix
 
-def visualize_matrix(matrix, x_resolution, y_resolution, path):
+def visualize_matrix(matrix: list[list[int]], x_resolution: int, y_resolution: int, path: str) -> None:
     matrix = np.asarray(matrix)
 
     n, m = matrix.shape
@@ -119,12 +100,12 @@ def visualize_matrix(matrix, x_resolution, y_resolution, path):
     img = tf.shade(agg, cmap=["black", "white"])
     img.to_pil().save()
 
-def log_visualizations(resolutions: list[list], mode = MODES.PERIODICITY_TO_START):
+def log_visualizations(resolutions: list[list], mode = MODES.PERIODICITY_TO_START) -> None:
     funcs = {
         MODES.PERIODICITY_TO_START_GRADIENT: periodicity_to_start_gradient,
         MODES.PERIODICITY_TO_START: periodicity_to_start,
-        MODES.PERIODICITY_PARTIAL_GRADIENT: periodicity_partial_gradient_new,
-        MODES.PERIODICITY_PARTIAL: periodicity_partial_new
+        MODES.PERIODICITY_PARTIAL_GRADIENT: periodicity_partial_gradient,
+        MODES.PERIODICITY_PARTIAL: periodicity_partial
     }
     f = funcs[mode]
     for resolution in resolutions:
@@ -132,20 +113,9 @@ def log_visualizations(resolutions: list[list], mode = MODES.PERIODICITY_TO_STAR
         visualize_matrix(matrix, *resolution, path = f'results/{str(resolution)}-{mode.name}.png')
 
 
-def main():
+def main() -> None:
     #log_visualizations(resolutions=[[200, 210]], mode = MODES.PERIODICITY_PARTIAL)
-    start_time = time()
-    a = apply_over_matrix(periodicity_partial_new, 1000, 500)
-    print(time() - start_time)
-    start_time = time()
-    a = apply_over_matrix(periodicity_partial_old, 1000, 500)
-    print(time() - start_time)
-    start_time = time()
-    a = apply_over_matrix(periodicity_partial_gradient_new, 1000, 500)
-    print(time() - start_time)
-    start_time = time()
-    a = apply_over_matrix(periodicity_partial_gradient_old, 1000, 500)
-    print(time() - start_time)
+    pass
 
 if __name__ == "__main__":
     main()
