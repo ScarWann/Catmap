@@ -1,9 +1,11 @@
+import array
 import datashader as ds
 from datashader import transfer_functions as tf
 from enum import Enum
 from numba import jit
 import numpy as np
 import pandas as pd
+import dearpygui.dearpygui as dpg
 
 
 MAX_ITERATIONS = 1000
@@ -26,7 +28,7 @@ def periodicity_to_start(x_init: int, y_init: int, x_resolution: int, y_resoluti
     x = x_init
     y = y_init
 
-    for i in range(MAX_ITERATIONS):
+    for _ in range(MAX_ITERATIONS):
         x, y = (2 * x + y) % x_resolution, (x + y) % y_resolution
         if x == x_init and y == y_init:
             return 1
@@ -67,7 +69,7 @@ def periodicity_partial(x: int, y: int, x_resolution: int, y_resolution: int) ->
     return -1
 
 
-@jit
+@jit(nopython = True)
 def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int) -> np.ndarray:
     matrix = np.zeros(shape = (x_resolution, y_resolution), dtype=np.int64)
 
@@ -78,17 +80,36 @@ def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int) -> np.n
 
 
 
+def apply_over_matrix(f, x_resolution: int, y_resolution: int) -> np.ndarray:
+    matrix = np.zeros(shape = (x_resolution, y_resolution), dtype=np.int16)
 
-@jit(nopython = True)
-def apply_over_matrix(f, x_resolution: int, y_resolution: int) -> list[list[int]]:
-    matrix = []
-    
     for i in range(x_resolution):
-        row = []
         for j in range(y_resolution):
-            row.append(f(i, j, x_resolution, y_resolution))
-        matrix.append(row)
+            matrix[i, j] = f(i, j, x_resolution, y_resolution)
     return matrix
+
+def pack_rgba_data(matrix: np.ndarray):
+    raveled_matrix = (matrix / matrix.max()).ravel()
+
+    rgba_data = np.stack((
+        raveled_matrix,
+        np.zeros_like(raveled_matrix),
+        np.zeros_like(raveled_matrix),
+        np.ones_like(raveled_matrix)
+    ), axis=1).reshape(-1)
+
+    return array.array('f', rgba_data)
+
+def pack_rgb_data(matrix: np.ndarray):
+    raveled_matrix = (matrix / matrix.max()).ravel()
+
+    rgba_data = np.stack((
+        raveled_matrix,
+        np.zeros_like(raveled_matrix),
+        np.zeros_like(raveled_matrix)
+    ), axis=1).reshape(-1)
+
+    return array.array('f', rgba_data)
 
 def visualize_matrix(matrix: list[list[int]], x_resolution: int, y_resolution: int, path: str) -> None:
     matrix = np.asarray(matrix)
@@ -126,9 +147,32 @@ def log_visualizations(resolutions: list[list], mode = MODES.PERIODICITY_TO_STAR
 
 
 def main() -> None:
-    log_visualizations(resolutions=[[200, 100]], mode = MODES.PIXEL_MOVEMENT, start_coords=(1, 2))
-    #visualize_matrix(pixel_movement(2, 1, 200, 210), 200, 210, f'results/{'x'.join(map(str, [200, 210]))}-{'IDK'}.png')
-    #log_visualizations([[24, 24]], mode = MODES.PERIODICITY_TO_START_GRADIENT)
+    WIDTH = 1920
+    HEIGHT = 1080
+    #log_visualizations(resolutions=[[200, 100]], mode = MODES.PIXEL_MOVEMENT, start_coords=(1, 2))
+    dpg.create_context()
+    matrix = apply_over_matrix(periodicity_to_start, HEIGHT, WIDTH)
+    raw_data = pack_rgba_data(matrix)
+    with dpg.texture_registry():
+        dpg.add_raw_texture(
+            width=WIDTH,
+            height=HEIGHT,
+            format=dpg.mvFormat_Float_rgba,
+            default_value=raw_data,
+            tag="matrix_texture"
+        )
+
+    with dpg.window(label="Main_image"):
+        dpg.add_image("matrix_texture")
+
+    with dpg.window(label="Control panel"):
+        dpg.add_button(label="Save Image", callback=lambda:dpg.save_image(file=f"new{WIDTH}x{HEIGHT}.png", width=WIDTH, height=HEIGHT, data=pack_rgb_data(matrix), components=3))
+
+    dpg.create_viewport(title='Catmap Visualizer', width=1920, height=1080)
+    dpg.setup_dearpygui()
+    dpg.show_viewport()
+    dpg.start_dearpygui()
+    dpg.destroy_context()
 
 if __name__ == "__main__":
     main()
