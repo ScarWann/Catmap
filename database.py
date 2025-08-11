@@ -18,10 +18,12 @@ except:
 def create_catmaps_table():
     with conn.cursor() as curs:
         curs.execute(CREATE_TABLE_CATMAP)
+        conn.commit()
 
 def insert_catmap_data(width: int, height: int, funcx: str, funcy: str, start_x: int, start_y: int, maptype: MODE):
     with conn.cursor() as curs:
         curs.execute(INSERT_CATMAP, (width, height, funcx, funcy, start_x, start_y, maptype.value))
+        conn.commit()
 
 def find_catmap_id(width: int, height: int, funcx: str, funcy: str, start_x: int, start_y: int, maptype: MODE):
     with conn.cursor() as curs:

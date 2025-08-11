@@ -4,6 +4,7 @@ from datashader import transfer_functions as tf
 from numba import njit, core
 import numpy as np
 import pandas as pd
+from PIL import Image
 import database
 from database import *
 import dearpygui.dearpygui as dpg
@@ -39,18 +40,6 @@ def periodicity_to_start(x_init: int, y_init: int, x_resolution: int, y_resoluti
         if x == x_init and y == y_init:
             return 1
     return -1
-
-@njit
-def periodicity_to_start_exec(x_init: int, y_init: int, x_resolution: int, y_resolution: int, x_func: str = "2 * x + y", y_func: str = "x + y") -> int:
-    x = x_init
-    y = y_init
-
-    for _ in range(MAX_ITERATIONS):
-        x, y = x_func(x, y) % x_resolution, y_func(x, y) % y_resolution
-        if x == x_init and y == y_init:
-            return 1
-    return -1
-
 
 @njit
 def periodicity_partial_gradient(x: int, y: int, x_resolution: int, y_resolution: int) -> int:
@@ -98,11 +87,11 @@ def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int) -> np.n
 
 
 def apply_over_matrix(f: core.registry.CPUDispatcher, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> np.ndarray:
-    matrix = np.zeros(shape = (x_resolution, y_resolution), dtype=np.int16)
+    matrix = np.zeros(shape = (y_resolution, x_resolution), dtype=np.int16)
 
     for i in range(x_resolution):
         for j in range(y_resolution):
-            matrix[i, j] = f(i, j, x_resolution, y_resolution, x_func, y_func)
+            matrix[j, i] = f(i, j, x_resolution, y_resolution, x_func, y_func)
     return matrix
 
 def pack_rgba_data(matrix: np.ndarray):
@@ -164,17 +153,29 @@ def log_visualizations(resolutions: list[list], mode = MODE.PERIODICITY_TO_START
             matrix = f(*start_coords, *resolution)
         visualize_matrix(matrix, *resolution, path = f'results/{'x'.join(map(str, resolution))}-{mode.name}.png')
 
+def apply_over_matrix_old(f, x_resolution: int, y_resolution: int) -> np.ndarray:
+    matrix = np.zeros(shape = (x_resolution, y_resolution), dtype=np.int16)
+    for i in range(x_resolution):
+        for j in range(y_resolution):
+            matrix[i, j] = f(j, i, x_resolution, y_resolution)
+    return matrix
+
 def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
                    mode: MODE = MODE.PERIODICITY_TO_START,
-                   x_start: int | None = None, y_start: int | None = None, 
+                   x_start: int = 0, y_start: int = 0, 
                    x_func_str: str = "2 * x + y", y_func_str: str = "x + y") -> np.ndarray:
     
-    create_catmaps_table()
-    id = find_catmap_id(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)
-    if not id:
-        id = find_last_id()
+    id = find_catmap_id(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)[0]
+    print(id)
+    if id:
+        im_frame = Image.open(f"{id}_{x_resolution}x{y_resolution}.png")
+        np_frame = np.array(im_frame.getdata(0))
+        return np_frame / np_frame.max()
+    
+    id = find_last_id()
 
-    print("PostgreSQL id recieved")
+    print(id)
+
 
     x_func = make_njit_func(x_func_str)
     y_func = make_njit_func(y_func_str)
@@ -206,6 +207,8 @@ def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
 
     print("DB logging complete")
 
+    return matrix
+
 
 
 def main() -> None:
@@ -229,7 +232,7 @@ def main() -> None:
         dpg.add_image("matrix_texture")
 
     with dpg.window(label="Control panel"):
-        dpg.add_button(label="Save Image", callback=lambda:dpg.save_image(file=f"new{WIDTH}x{HEIGHT}.png", width=WIDTH, height=HEIGHT, data=pack_rgb_data(matrix), components=3))
+        dpg.add_button(label="Save Image", callback=lambda:dpg.save_image(file=f"new{WIDTH}x{HEIGHT}.png", width=WIDTH, height=HEIGHT, data=matrix, components=3))
 
     dpg.create_viewport(title='Catmap Visualizer', width=1920, height=1080)
     dpg.setup_dearpygui()
