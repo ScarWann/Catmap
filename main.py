@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import array
 import datashader as ds
 from datashader import transfer_functions as tf
@@ -85,7 +87,7 @@ def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int) -> np.n
     return matrix
 
 
-
+@njit
 def apply_over_matrix(f: core.registry.CPUDispatcher, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> np.ndarray:
     matrix = np.zeros(shape = (y_resolution, x_resolution), dtype=np.int16)
 
@@ -153,70 +155,124 @@ def log_visualizations(resolutions: list[list], mode = MODE.PERIODICITY_TO_START
             matrix = f(*start_coords, *resolution)
         visualize_matrix(matrix, *resolution, path = f'results/{'x'.join(map(str, resolution))}-{mode.name}.png')
 
-def apply_over_matrix_old(f, x_resolution: int, y_resolution: int) -> np.ndarray:
-    matrix = np.zeros(shape = (x_resolution, y_resolution), dtype=np.int16)
-    for i in range(x_resolution):
-        for j in range(y_resolution):
-            matrix[i, j] = f(j, i, x_resolution, y_resolution)
-    return matrix
 
 def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
                    mode: MODE = MODE.PERIODICITY_TO_START,
                    x_start: int = 0, y_start: int = 0, 
                    x_func_str: str = "2 * x + y", y_func_str: str = "x + y") -> np.ndarray:
     
-    id = find_catmap_id(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)[0]
-    print(id)
-    if id:
+    try:
+        id = find_catmap_id(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)[0]
         im_frame = Image.open(f"{id}_{x_resolution}x{y_resolution}.png")
         np_frame = np.array(im_frame.getdata(0))
         return np_frame / np_frame.max()
-    
-    id = find_last_id()
-
-    print(id)
+    except:
+        id = find_last_id()
 
 
-    x_func = make_njit_func(x_func_str)
-    y_func = make_njit_func(y_func_str)
+        x_func = make_njit_func(x_func_str)
+        y_func = make_njit_func(y_func_str)
 
-    print("Njitification successful")
+        print("Njitification successful")
 
-    funcs = {
-        MODE.PERIODICITY_TO_START_GRADIENT: periodicity_to_start_gradient,
-        MODE.PERIODICITY_TO_START: periodicity_to_start,
-        MODE.PERIODICITY_PARTIAL_GRADIENT: periodicity_partial_gradient,
-        MODE.PERIODICITY_PARTIAL: periodicity_partial,
-        MODE.PIXEL_MOVEMENT: pixel_movement
+        funcs = {
+            MODE.PERIODICITY_TO_START_GRADIENT: periodicity_to_start_gradient,
+            MODE.PERIODICITY_TO_START: periodicity_to_start,
+            MODE.PERIODICITY_PARTIAL_GRADIENT: periodicity_partial_gradient,
+            MODE.PERIODICITY_PARTIAL: periodicity_partial,
+            MODE.PIXEL_MOVEMENT: pixel_movement
+        }
+        f = funcs[mode]
+
+
+        if mode != MODE.PIXEL_MOVEMENT:
+            matrix = apply_over_matrix(f, x_resolution, y_resolution, x_func, y_func)
+        else:
+            matrix = f(x_start, y_start, x_resolution, y_resolution)
+
+        print("Matrix generation successful")
+
+        dpg.save_image(file=f"{id}_{x_resolution}x{y_resolution}.png", width=x_resolution, height=y_resolution, data=pack_rgb_data(matrix), components=3)
+
+        print("Save complete")
+
+        insert_catmap_data(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)
+
+        print("DB logging complete")
+
+        return matrix
+
+
+def update_image():
+    width = dpg.get_value("generation width resolution")
+    height = dpg.get_value("generation height resolution")
+    x_start = dpg.get_value("generation x start")
+    y_start = dpg.get_value("generation y start")
+    x_function = dpg.get_value("generation x function")
+    y_function = dpg.get_value("generation y function")
+    gradient = dpg.get_value("generation gradient")
+    mode = dpg.get_value("generation mode")
+
+    modes = {
+        (False, "Periodicity to start"): MODE.PERIODICITY_TO_START,
+        (True, "Periodicity to start"): MODE.PERIODICITY_TO_START_GRADIENT,
+        (False, "General periodicity"): MODE.PERIODICITY_PARTIAL,
+        (True, "General periodicity"): MODE.PERIODICITY_PARTIAL_GRADIENT,
+        (False, "Individual pixel movement"): MODE.PIXEL_MOVEMENT,
+        (True, "Individual pixel movement"): MODE.PIXEL_MOVEMENT
     }
-    f = funcs[mode]
 
+    matrix = generate_image(width, height, modes[(gradient, mode)], x_start, y_start, x_function, y_function)
+    raw_data = pack_rgb_data(matrix)
 
-    if mode != MODE.PIXEL_MOVEMENT:
-        matrix = apply_over_matrix(f, x_resolution, y_resolution, x_func, y_func)
+    dpg.set_value("matrix_texture", raw_data)
+
+def test(sender, app_data, user_data):
+    print(sender, app_data, user_data)
+
+def update_panel(sender, app_data):
+    if app_data == "Individual pixel movement":
+        dpg.show_item("generation pixel movement")
+        dpg.hide_item("generation gradient")
     else:
-        matrix = f(x_start, y_start, x_resolution, y_resolution)
+        dpg.hide_item("generation pixel movement")
+        dpg.show_item("generation gradient")
 
-    print("Matrix generation successful")
+def create_generating_panel():
+    with dpg.window(label="Generation panel"):
+        #dpg.add_button(label="Generate image", callback=update_image())
+        with dpg.group(horizontal=True):
+            dpg.add_input_int(label = "Image width", default_value=1920, tag = "generation width resolution", width=100)
+            dpg.add_input_int(label = "Image height", default_value=1080, tag = "generation height resolution", width=100)
+        with dpg.group(horizontal=True):
+            dpg.add_input_text(label = "X function", default_value="2 * x + y", tag = "generation x function", width=100)
+            dpg.add_input_text(label = "Y function", default_value="x + y", tag = "generation y function", width=100)
+        dpg.add_combo(items=["Periodicity to start", "General periodicity", "Individual pixel movement"], default_value="Periodicity to start", tag = "generation mode", callback=update_panel)
+        with dpg.group(horizontal=True, tag = "generation pixel movement", show = False):
+            dpg.add_input_int(label = "Starting X", default_value=0, tag = "generation x start", width=100)
+            dpg.add_input_int(label = "Starting Y", default_value=0, tag = "generation y start", width=100)
+        dpg.add_checkbox(label="Gradient mode (displays how fast a pixel returns to original position, for example)", default_value=False, tag = "generation gradient")
+        dpg.add_button(label="Generate", callback=update_image)
 
-    dpg.save_image(file=f"{id}_{x_resolution}x{y_resolution}.png", width=x_resolution, height=y_resolution, data=pack_rgb_data(matrix), components=3)
 
-    print("Save complete")
+def setup():
+    with dpg.handler_registry():
+        dpg.add_key_press_handler(key=dpg.mvKey_C, callback=create_generating_panel)
 
-    insert_catmap_data(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)
-
-    print("DB logging complete")
-
-    return matrix
-
+    with dpg.value_registry():
+        dpg.add_int_value()
+        dpg.add_int_value(default_value=1080, tag = "generating height resolution")
+        dpg.add_string_value(default_value="2 * x + y", tag = "generating x function")
+        dpg.add_string_value(default_value="x + y", tag = "generating y function")
+        dpg.add_bool_value(default_value=False, tag = "gradient mode")
 
 
 def main() -> None:
-
     WIDTH = 1920
     HEIGHT = 1080
-    #log_visualizations(resolutions=[[200, 100]], mode = MODES.PIXEL_MOVEMENT, start_coords=(1, 2))
+
     dpg.create_context()
+    setup()
     matrix = generate_image()
     raw_data = pack_rgb_data(matrix)
     with dpg.texture_registry():
@@ -228,28 +284,35 @@ def main() -> None:
             tag="matrix_texture"
         )
 
-    with dpg.window(label="Main_image"):
+    """with dpg.window(no_move=True, no_resize=True, no_inputs=True, no_title_bar=True, no_background=True):
+        with dpg.drawlist(width=1920, height=1080):
+            dpg.draw_image("matrix_texture", (0, 0), (1920, 1080))"""
+
+    dpg.create_viewport(title='Catmap Visualizer', width=1920, height=1080, decorated=False)
+
+    with dpg.window(label="Main_image", no_move=True, no_title_bar=True, no_bring_to_front_on_focus=True, no_scrollbar=True, no_scroll_with_mouse=True, no_resize=True, no_background=True, no_collapse=True) as background_window:
         dpg.add_image("matrix_texture")
+        with dpg.theme() as borderless_theme:
+            with dpg.theme_component(dpg.mvAll):
+                dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 0)
+                dpg.add_theme_style(dpg.mvStyleVar_WindowBorderSize, 0)
+            dpg.bind_item_theme(background_window, borderless_theme)
 
-    with dpg.window(label="Control panel"):
-        dpg.add_button(label="Save Image", callback=lambda:dpg.save_image(file=f"new{WIDTH}x{HEIGHT}.png", width=WIDTH, height=HEIGHT, data=matrix, components=3))
+    def resize_to_viewport():
+        w = dpg.get_viewport_client_width()
+        h = dpg.get_viewport_client_height()
+        dpg.set_item_width(background_window, w)
+        dpg.set_item_height(background_window, h)
 
-    dpg.create_viewport(title='Catmap Visualizer', width=1920, height=1080)
+    dpg.set_viewport_resize_callback(lambda s,a: resize_to_viewport())
+
+    #dpg.add_theme_style(dpg.mvStyleVar_WindowBorderSize, 0)
+
     dpg.setup_dearpygui()
     dpg.show_viewport()
+    resize_to_viewport()
     dpg.start_dearpygui()
     dpg.destroy_context()
-
-    """
-    start = perf_counter()
-    matrix = apply_over_matrix(periodicity_to_start, HEIGHT, WIDTH)
-    end = perf_counter()
-    print(end - start)
-    start = perf_counter()
-    matrix = apply_over_matrix(periodicity_to_start_exec, HEIGHT, WIDTH)
-    end = perf_counter()
-    print(end - start)"""
-
 
 if __name__ == "__main__":
     main()
