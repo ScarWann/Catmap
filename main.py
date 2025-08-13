@@ -203,26 +203,35 @@ def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
         return matrix
 
 
-def update_image():
-    width = dpg.get_value("generation width resolution")
-    height = dpg.get_value("generation height resolution")
-    x_start = dpg.get_value("generation x start")
-    y_start = dpg.get_value("generation y start")
-    x_function = dpg.get_value("generation x function")
-    y_function = dpg.get_value("generation y function")
-    gradient = dpg.get_value("generation gradient")
-    mode = dpg.get_value("generation mode")
+def update_image(sender, app_data, user_data):
+    print(user_data)
+    if user_data:
+        width, height, x_function, y_function, x_start, y_start = user_data[:-1]
+        mode = MODE(user_data[-1])
+    else:
+        width = dpg.get_value("generation width resolution")
+        height = dpg.get_value("generation height resolution")
+        x_start = dpg.get_value("generation x start")
+        y_start = dpg.get_value("generation y start")
+        x_function = dpg.get_value("generation x function")
+        y_function = dpg.get_value("generation y function")
+        mode = dpg.get_value("generation mode")
+        gradient = dpg.get_value("generation gradient")
 
-    modes = {
-        (False, "Periodicity to start"): MODE.PERIODICITY_TO_START,
-        (True, "Periodicity to start"): MODE.PERIODICITY_TO_START_GRADIENT,
-        (False, "General periodicity"): MODE.PERIODICITY_PARTIAL,
-        (True, "General periodicity"): MODE.PERIODICITY_PARTIAL_GRADIENT,
-        (False, "Individual pixel movement"): MODE.PIXEL_MOVEMENT,
-        (True, "Individual pixel movement"): MODE.PIXEL_MOVEMENT
-    }
+        modes = {
+            (False, "Periodicity to start"): MODE.PERIODICITY_TO_START,
+            (True, "Periodicity to start"): MODE.PERIODICITY_TO_START_GRADIENT,
+            (False, "General periodicity"): MODE.PERIODICITY_PARTIAL,
+            (True, "General periodicity"): MODE.PERIODICITY_PARTIAL_GRADIENT,
+            (False, "Individual pixel movement"): MODE.PIXEL_MOVEMENT,
+            (True, "Individual pixel movement"): MODE.PIXEL_MOVEMENT
+        }
 
-    matrix = generate_image(width, height, modes[(gradient, mode)], x_start, y_start, x_function, y_function)
+        mode = modes[(gradient, mode)]
+
+
+
+    matrix = generate_image(width, height, mode, x_start, y_start, x_function, y_function)
     raw_data = pack_rgb_data(matrix)
 
     dpg.set_value("matrix_texture", raw_data)
@@ -230,7 +239,7 @@ def update_image():
 def test(sender, app_data, user_data):
     print(sender, app_data, user_data)
 
-def update_panel(sender, app_data):
+def update_generating_panel(sender, app_data):
     if app_data == "Individual pixel movement":
         dpg.show_item("generation pixel movement")
         dpg.hide_item("generation gradient")
@@ -240,31 +249,61 @@ def update_panel(sender, app_data):
 
 def create_generating_panel():
     with dpg.window(label="Generation panel"):
-        #dpg.add_button(label="Generate image", callback=update_image())
         with dpg.group(horizontal=True):
             dpg.add_input_int(label = "Image width", default_value=1920, tag = "generation width resolution", width=100)
             dpg.add_input_int(label = "Image height", default_value=1080, tag = "generation height resolution", width=100)
         with dpg.group(horizontal=True):
             dpg.add_input_text(label = "X function", default_value="2 * x + y", tag = "generation x function", width=100)
             dpg.add_input_text(label = "Y function", default_value="x + y", tag = "generation y function", width=100)
-        dpg.add_combo(items=["Periodicity to start", "General periodicity", "Individual pixel movement"], default_value="Periodicity to start", tag = "generation mode", callback=update_panel)
+        dpg.add_combo(items=["Periodicity to start", "General periodicity", "Individual pixel movement"], default_value="Periodicity to start", tag = "generation mode", callback=update_generating_panel)
         with dpg.group(horizontal=True, tag = "generation pixel movement", show = False):
             dpg.add_input_int(label = "Starting X", default_value=0, tag = "generation x start", width=100)
             dpg.add_input_int(label = "Starting Y", default_value=0, tag = "generation y start", width=100)
         dpg.add_checkbox(label="Gradient mode (displays how fast a pixel returns to original position, for example)", default_value=False, tag = "generation gradient")
         dpg.add_button(label="Generate", callback=update_image)
 
+def create_database_panel():
+    with dpg.window(label = "Saved catmaps"):
+        with dpg.table(header_row=True):
+
+            dpg.add_table_column(label="ID")
+            dpg.add_table_column(label="Width")
+            dpg.add_table_column(label="Height")
+            dpg.add_table_column(label="X function")
+            dpg.add_table_column(label="Y function")
+            dpg.add_table_column(label="X start")
+            dpg.add_table_column(label="Y start")
+            dpg.add_table_column(label="Mode")
+            dpg.add_table_column()
+
+            data = load_catmaps_table()
+            print(data)
+            for catmap in data:
+                with dpg.table_row():
+                    for param in catmap:
+                        dpg.add_text(param)
+                    dpg.add_button(label = "Load", callback = update_image, user_data=catmap[1:])
+
+
+
+def create_pixel_panel():
+    pass
+
+def create_help_panel():
+    pass
+
+def create_legend_panel():
+    pass
 
 def setup():
     with dpg.handler_registry():
         dpg.add_key_press_handler(key=dpg.mvKey_C, callback=create_generating_panel)
+        dpg.add_key_press_handler(key=dpg.mvKey_D, callback=create_database_panel)
+        dpg.add_key_press_handler(key=dpg.mvKey_X, callback=create_pixel_panel)
+        dpg.add_key_press_handler(key=dpg.mvKey_H, callback=create_help_panel)
+        dpg.add_key_press_handler(key=dpg.mvKey_C, callback=create_legend_panel)
 
-    with dpg.value_registry():
-        dpg.add_int_value()
-        dpg.add_int_value(default_value=1080, tag = "generating height resolution")
-        dpg.add_string_value(default_value="2 * x + y", tag = "generating x function")
-        dpg.add_string_value(default_value="x + y", tag = "generating y function")
-        dpg.add_bool_value(default_value=False, tag = "gradient mode")
+    
 
 
 def main() -> None:

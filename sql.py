@@ -11,6 +11,10 @@ CREATE_TABLE_CATMAP = """
     );
 """
 
+LOAD_TABLE_CATMAP = """
+    SELECT * FROM catmaps;
+"""
+
 INSERT_CATMAP = """
     INSERT INTO catmaps (width, height, xfunc, yfunc, xstart, ystart, type)
     VALUES (%s, %s, %s, %s, %s, %s, %s);
