@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 
 import array
-import datashader as ds
-from datashader import transfer_functions as tf
-from numba import njit, core
-import numpy as np
-import pandas as pd
-from PIL import Image
 import database
 from database import *
 import dearpygui.dearpygui as dpg
+from numba import njit, core
+import numpy as np
+from PIL import Image
 from time import perf_counter
+import math
 
 
 MAX_ITERATIONS = 1000
@@ -121,53 +119,51 @@ def pack_rgb_data(matrix: np.ndarray):
 
     return array.array('f', rgba_data)
 
-def visualize_matrix(matrix: list[list[int]], x_resolution: int, y_resolution: int, path: str) -> None:
-    matrix = np.asarray(matrix)
+def fit_to_screen_size(matrix: np.ndarray):
+    SCREEN_WIDTH = 1920
+    SCREEN_HEIGHT = 1080
 
-    n, m = matrix.shape
-
-    x_coords, y_coords = np.mgrid[0:n, 0:m]
-    df = pd.DataFrame({
-        'x': x_coords.ravel(),
-        'y': y_coords.ravel(),
-        'value': matrix.ravel()
-    })
-
-    canvas = ds.Canvas(plot_width=x_resolution, plot_height=y_resolution)
-    agg = canvas.points(df, 'x', 'y', ds.mean('value'))
-    img = tf.shade(agg, cmap=["black", "white"])
-    img.to_pil().save(path)
-
-def log_visualizations(resolutions: list[list], mode = MODE.PERIODICITY_TO_START, start_coords = None) -> None:
-    funcs = {
-        MODE.PERIODICITY_TO_START_GRADIENT: periodicity_to_start_gradient,
-        MODE.PERIODICITY_TO_START: periodicity_to_start,
-        MODE.PERIODICITY_PARTIAL_GRADIENT: periodicity_partial_gradient,
-        MODE.PERIODICITY_PARTIAL: periodicity_partial,
-        MODE.PIXEL_MOVEMENT: pixel_movement
-    }
-    f = funcs[mode]
-
-    for resolution in resolutions:
-        if mode != MODE.PIXEL_MOVEMENT:
-            matrix = apply_over_matrix(f, *resolution)
+    matrix_width, matrix_height = matrix.shape
+    print(matrix_height, matrix_width)
+    while True:
+        if matrix_width * 2 <= SCREEN_WIDTH and matrix_height * 2 <= SCREEN_HEIGHT:
+            matrix = np.repeat(np.repeat(matrix, 2, axis=1), 2, axis=0)
+            matrix_width *= 2
+            matrix_height *= 2
+        elif matrix_width > SCREEN_WIDTH or matrix_height > SCREEN_HEIGHT:
+            matrix = matrix[::2, ::2]
+            matrix_width = math.ceil(float(matrix_width) / 2)
+            matrix_height = math.ceil(float(matrix_height) / 2)
         else:
-            matrix = f(*start_coords, *resolution)
-        visualize_matrix(matrix, *resolution, path = f'results/{'x'.join(map(str, resolution))}-{mode.name}.png')
+            break
+    padded = np.pad(matrix, pad_width=((math.floor((SCREEN_WIDTH - matrix_width) / 2),  \
+                                        math.ceil((SCREEN_WIDTH - matrix_width) / 2)), \
+                                       (math.floor((SCREEN_HEIGHT - matrix_height) / 2),\
+                                        math.ceil((SCREEN_HEIGHT - matrix_height) / 2))),\
+                                        mode='constant', constant_values=0)
+    
+    print(matrix.shape)
+    print(matrix_height, matrix_width)
+    print(padded.shape)
+    
+    return padded
 
+
+    
 
 def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
                    mode: MODE = MODE.PERIODICITY_TO_START,
                    x_start: int = 0, y_start: int = 0, 
-                   x_func_str: str = "2 * x + y", y_func_str: str = "x + y") -> np.ndarray:
+                   x_func_str: str = "2 * x + y", y_func_str: str = "x + y"):
     
     try:
-        id = find_catmap_id(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)[0]
-        im_frame = Image.open(f"{id}_{x_resolution}x{y_resolution}.png")
+        id_ = find_catmap_id(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)[0]
+        im_frame = Image.open(f"{id_}_{x_resolution}x{y_resolution}.png")
         np_frame = np.array(im_frame.getdata(0))
-        return np_frame / np_frame.max()
+        np_frame = np.reshape(np_frame, (x_resolution, y_resolution))
+        return id_, np_frame / np_frame.max()
     except:
-        id = find_last_id()
+        id_ = find_last_id()
 
 
         x_func = make_njit_func(x_func_str)
@@ -192,7 +188,7 @@ def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
 
         print("Matrix generation successful")
 
-        dpg.save_image(file=f"{id}_{x_resolution}x{y_resolution}.png", width=x_resolution, height=y_resolution, data=pack_rgb_data(matrix), components=3)
+        dpg.save_image(file=f"{id_}_{x_resolution}x{y_resolution}.png", width=x_resolution, height=y_resolution, data=pack_rgb_data(matrix), components=3)
 
         print("Save complete")
 
@@ -200,11 +196,10 @@ def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
 
         print("DB logging complete")
 
-        return matrix
+        return id_, matrix
 
 
 def update_image(sender, app_data, user_data):
-    print(user_data)
     if user_data:
         width, height, x_function, y_function, x_start, y_start = user_data[:-1]
         mode = MODE(user_data[-1])
@@ -231,10 +226,18 @@ def update_image(sender, app_data, user_data):
 
 
 
-    matrix = generate_image(width, height, mode, x_start, y_start, x_function, y_function)
-    raw_data = pack_rgb_data(matrix)
+    id_, matrix = generate_image(width, height, mode, x_start, y_start, x_function, y_function)
+    raw_data = pack_rgb_data(fit_to_screen_size(matrix))
+    """
+    if width > 1920:
+        pass
+    elif height > 1080:
+        pass
+    elif width != 1920 and height != 1080 and :"""
 
     dpg.set_value("matrix_texture", raw_data)
+
+    return id_
 
 def test(sender, app_data, user_data):
     print(sender, app_data, user_data)
@@ -262,7 +265,7 @@ def create_generating_panel():
         dpg.add_checkbox(label="Gradient mode (displays how fast a pixel returns to original position, for example)", default_value=False, tag = "generation gradient")
         dpg.add_button(label="Generate", callback=update_image)
 
-def create_database_panel():
+def create_database_panel(sender, app_data, user_data):
     with dpg.window(label = "Saved catmaps"):
         with dpg.table(header_row=True):
 
@@ -291,6 +294,7 @@ def create_pixel_panel():
 
 def create_help_panel():
     pass
+    #dpg.add_button(label = "Open", callback = update_image, user_data=catmap[1:])
 
 def create_legend_panel():
     pass
@@ -312,8 +316,8 @@ def main() -> None:
 
     dpg.create_context()
     setup()
-    matrix = generate_image()
-    raw_data = pack_rgb_data(matrix)
+    raw_data = array.array('f', np.zeros((WIDTH * HEIGHT * 3), dtype=np.float16))
+    print(len(raw_data))
     with dpg.texture_registry():
         dpg.add_raw_texture(
             width=WIDTH,
@@ -329,7 +333,7 @@ def main() -> None:
 
     dpg.create_viewport(title='Catmap Visualizer', width=1920, height=1080, decorated=False)
 
-    with dpg.window(label="Main_image", no_move=True, no_title_bar=True, no_bring_to_front_on_focus=True, no_scrollbar=True, no_scroll_with_mouse=True, no_resize=True, no_background=True, no_collapse=True) as background_window:
+    with dpg.window(label="Main_image", no_move=True, no_title_bar=True, no_bring_to_front_on_focus=True, no_scroll_with_mouse=True, no_resize=True, no_background=True, no_collapse=True) as background_window:
         dpg.add_image("matrix_texture")
         with dpg.theme() as borderless_theme:
             with dpg.theme_component(dpg.mvAll):
