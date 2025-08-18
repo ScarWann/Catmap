@@ -120,26 +120,27 @@ def pack_rgb_data(matrix: np.ndarray):
     return array.array('f', rgba_data)
 
 def fit_to_screen_size(matrix: np.ndarray):
-    SCREEN_WIDTH = 1920
     SCREEN_HEIGHT = 1080
+    SCREEN_WIDTH = 1920
 
     matrix_width, matrix_height = matrix.shape
     print(matrix_height, matrix_width)
     while True:
-        if matrix_width * 2 <= SCREEN_WIDTH and matrix_height * 2 <= SCREEN_HEIGHT:
+        if matrix_width * 2 <= SCREEN_HEIGHT and matrix_height * 2 <= SCREEN_WIDTH:
             matrix = np.repeat(np.repeat(matrix, 2, axis=1), 2, axis=0)
             matrix_width *= 2
             matrix_height *= 2
-        elif matrix_width > SCREEN_WIDTH or matrix_height > SCREEN_HEIGHT:
-            matrix = matrix[::2, ::2]
-            matrix_width = math.ceil(float(matrix_width) / 2)
-            matrix_height = math.ceil(float(matrix_height) / 2)
+        elif matrix_width > SCREEN_HEIGHT or matrix_height > SCREEN_WIDTH:
+            sh = (matrix.shape[0] // 2, 2, matrix.shape[1] // 2, 2)
+            matrix = matrix.reshape(sh).mean(axis = (1, 3))
+            matrix_width = math.floor(float(matrix_width) / 2)
+            matrix_height = math.floor(float(matrix_height) / 2)
         else:
             break
-    padded = np.pad(matrix, pad_width=((math.floor((SCREEN_WIDTH - matrix_width) / 2),  \
-                                        math.ceil((SCREEN_WIDTH - matrix_width) / 2)), \
-                                       (math.floor((SCREEN_HEIGHT - matrix_height) / 2),\
-                                        math.ceil((SCREEN_HEIGHT - matrix_height) / 2))),\
+    padded = np.pad(matrix, pad_width=((math.floor((SCREEN_HEIGHT - matrix_width) / 2),  \
+                                        math.ceil((SCREEN_HEIGHT - matrix_width) / 2)), \
+                                       (math.floor((SCREEN_WIDTH - matrix_height) / 2),\
+                                        math.ceil((SCREEN_WIDTH - matrix_height) / 2))),\
                                         mode='constant', constant_values=0)
     
     print(matrix.shape)
@@ -147,8 +148,6 @@ def fit_to_screen_size(matrix: np.ndarray):
     print(padded.shape)
     
     return padded
-
-
     
 
 def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
@@ -159,8 +158,8 @@ def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
     try:
         id_ = find_catmap_id(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)[0]
         im_frame = Image.open(f"{id_}_{x_resolution}x{y_resolution}.png")
-        np_frame = np.array(im_frame.getdata(0))
-        np_frame = np.reshape(np_frame, (x_resolution, y_resolution))
+        np_frame = np.array(im_frame.getdata(0), dtype=np.float16)
+        np_frame = np.reshape(np_frame, (y_resolution, x_resolution))
         return id_, np_frame / np_frame.max()
     except:
         id_ = find_last_id()
@@ -333,7 +332,7 @@ def main() -> None:
 
     dpg.create_viewport(title='Catmap Visualizer', width=1920, height=1080, decorated=False)
 
-    with dpg.window(label="Main_image", no_move=True, no_title_bar=True, no_bring_to_front_on_focus=True, no_scroll_with_mouse=True, no_resize=True, no_background=True, no_collapse=True) as background_window:
+    with dpg.window(label="Main_image", no_move=True, no_title_bar=True, no_bring_to_front_on_focus=True, no_scroll_with_mouse=True, no_scrollbar=True, no_resize=True, no_background=True, no_collapse=True) as background_window:
         dpg.add_image("matrix_texture")
         with dpg.theme() as borderless_theme:
             with dpg.theme_component(dpg.mvAll):
