@@ -20,7 +20,7 @@ def make_njit_func(func_str: str):
     return njit(ns["f"])
 
 @njit
-def periodicity_to_start_gradient(x_init: int, y_init: int, x_resolution: int, y_resolution: int, x_func, y_func) -> int:
+def periodicity_to_start_gradient(x_init: int, y_init: int, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> int:
     x = x_init
     y = y_init
 
@@ -42,14 +42,14 @@ def periodicity_to_start(x_init: int, y_init: int, x_resolution: int, y_resoluti
     return -1
 
 @njit
-def periodicity_partial_gradient(x: int, y: int, x_resolution: int, y_resolution: int) -> int:
+def periodicity_partial_gradient(x: int, y: int, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> int:
     visited = {}
     state = (x, y)
     visited[state] = 0
 
     for i in range(1, MAX_ITERATIONS + 1):
-        x_next = (2 * x + y) % x_resolution
-        y_next = (x + y) % y_resolution
+        x_next = x_func(x, y) % x_resolution
+        y_next = y_func(x, y) % y_resolution
         state = (x, y) = (x_next, y_next)
 
         if state in visited:
@@ -58,22 +58,30 @@ def periodicity_partial_gradient(x: int, y: int, x_resolution: int, y_resolution
     return -1
 
 @njit
-def periodicity_partial(x: int, y: int, x_resolution: int, y_resolution: int) -> int:
+def periodicity_partial(x: int, y: int, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> int:
     visited = {}
     state = (x, y)
-    visited[state] = 0
+    visited[state] = 1
 
-    for _ in range(1, MAX_ITERATIONS + 1):
-        x_next = (2 * x + y) % x_resolution
-        y_next = (x + y) % y_resolution
+    for i in range(1, MAX_ITERATIONS + 1):
+        x_next = x_func(x, y) % x_resolution
+        y_next = y_func(x, y) % y_resolution
         state = (x, y) = (x_next, y_next)
 
         if state in visited:
-            return 1
-        visited[state] = 0
-
+            return i - visited[state]
+        visited[state] = 1
     return -1
 
+
+@njit
+def pixel_movement_brute(x: int, y: int, x_resolution: int, y_resolution: int) -> np.ndarray:
+    matrix = np.zeros(shape = (x_resolution, y_resolution), dtype=np.int64)
+
+    for _ in range(MAX_ITERATIONS):
+        x, y = (2 * x + y) % x_resolution, (x + y) % y_resolution
+        matrix[x, y] += 1
+    return matrix
 
 @njit
 def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int) -> np.ndarray:
@@ -83,7 +91,6 @@ def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int) -> np.n
         x, y = (2 * x + y) % x_resolution, (x + y) % y_resolution
         matrix[x, y] += 1
     return matrix
-
 
 @njit
 def apply_over_matrix(f: core.registry.CPUDispatcher, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> np.ndarray:
@@ -120,35 +127,47 @@ def pack_rgb_data(matrix: np.ndarray):
     return array.array('f', rgba_data)
 
 def fit_to_screen_size(matrix: np.ndarray):
+    """
     SCREEN_HEIGHT = 1080
     SCREEN_WIDTH = 1920
 
-    matrix_width, matrix_height = matrix.shape
-    print(matrix_height, matrix_width)
+    matrix_height, matrix_width = matrix.shape
     while True:
-        if matrix_width * 2 <= SCREEN_HEIGHT and matrix_height * 2 <= SCREEN_WIDTH:
+        if matrix_height * 2 <= SCREEN_HEIGHT and matrix_width * 2 <= SCREEN_WIDTH:
             matrix = np.repeat(np.repeat(matrix, 2, axis=1), 2, axis=0)
-            matrix_width *= 2
             matrix_height *= 2
-        elif matrix_width > SCREEN_HEIGHT or matrix_height > SCREEN_WIDTH:
+            matrix_width *= 2
+        elif matrix_height > SCREEN_HEIGHT or matrix_width > SCREEN_WIDTH:
             sh = (matrix.shape[0] // 2, 2, matrix.shape[1] // 2, 2)
             matrix = matrix.reshape(sh).mean(axis = (1, 3))
-            matrix_width = math.floor(float(matrix_width) / 2)
             matrix_height = math.floor(float(matrix_height) / 2)
+            matrix_width = math.floor(float(matrix_width) / 2)
         else:
             break
-    padded = np.pad(matrix, pad_width=((math.floor((SCREEN_HEIGHT - matrix_width) / 2),  \
-                                        math.ceil((SCREEN_HEIGHT - matrix_width) / 2)), \
-                                       (math.floor((SCREEN_WIDTH - matrix_height) / 2),\
-                                        math.ceil((SCREEN_WIDTH - matrix_height) / 2))),\
+    padded = np.pad(matrix, pad_width=((math.floor((SCREEN_HEIGHT - matrix_height) / 2),  \
+                                        math.ceil((SCREEN_HEIGHT - matrix_height) / 2)), \
+                                       (math.floor((SCREEN_WIDTH - matrix_width) / 2),\
+                                        math.ceil((SCREEN_WIDTH - matrix_width) / 2))),\
                                         mode='constant', constant_values=0)
     
-    print(matrix.shape)
-    print(matrix_height, matrix_width)
-    print(padded.shape)
+    return padded"""
+    return matrix
     
-    return padded
-    
+def fetch_image(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode):
+    time = perf_counter()
+    id_ = find_catmap_id(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)[0]
+    print(f"Step speed {perf_counter() - time}")
+    time = perf_counter()
+    im_frame = Image.open(f"{id_}_{x_resolution}x{y_resolution}.png")
+    print(f"Step speed {perf_counter() - time}")
+    time = perf_counter()
+    np_frame = np.array(im_frame.getdata(0), dtype=np.float16)
+    print(f"Step speed {perf_counter() - time}")
+    time = perf_counter()
+    np_frame = np.reshape(np_frame, (y_resolution, x_resolution))
+    print(f"Step speed {perf_counter() - time}")
+    time = perf_counter()
+    return id_, np_frame / np_frame.max()
 
 def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
                    mode: MODE = MODE.PERIODICITY_TO_START,
@@ -156,19 +175,18 @@ def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
                    x_func_str: str = "2 * x + y", y_func_str: str = "x + y"):
     
     try:
-        id_ = find_catmap_id(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)[0]
-        im_frame = Image.open(f"{id_}_{x_resolution}x{y_resolution}.png")
-        np_frame = np.array(im_frame.getdata(0), dtype=np.float16)
-        np_frame = np.reshape(np_frame, (y_resolution, x_resolution))
-        return id_, np_frame / np_frame.max()
+        time = perf_counter()
+        data = fetch_image(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)
+        print(f"Fetch speed {perf_counter() - time}")
+        return data
     except:
         id_ = find_last_id()
 
-
+        time = perf_counter()
         x_func = make_njit_func(x_func_str)
         y_func = make_njit_func(y_func_str)
 
-        print("Njitification successful")
+        print(f"Njitification successful, speed:{perf_counter() - time}")
 
         funcs = {
             MODE.PERIODICITY_TO_START_GRADIENT: periodicity_to_start_gradient,
@@ -185,11 +203,12 @@ def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
         else:
             matrix = f(x_start, y_start, x_resolution, y_resolution)
 
-        print("Matrix generation successful")
+        print(f"Matrix generation successful, speed:{perf_counter() - time}")
 
         dpg.save_image(file=f"{id_}_{x_resolution}x{y_resolution}.png", width=x_resolution, height=y_resolution, data=pack_rgb_data(matrix), components=3)
 
-        print("Save complete")
+        time = perf_counter()
+        print(f"Save complete, speed:{perf_counter() - time}")
 
         insert_catmap_data(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)
 
@@ -199,6 +218,7 @@ def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
 
 
 def update_image(sender, app_data, user_data):
+    time = perf_counter()
     if user_data:
         width, height, x_function, y_function, x_start, y_start = user_data[:-1]
         mode = MODE(user_data[-1])
@@ -225,16 +245,16 @@ def update_image(sender, app_data, user_data):
 
 
 
+    print(f"Setup speed: {perf_counter() - time}")
     id_, matrix = generate_image(width, height, mode, x_start, y_start, x_function, y_function)
+    time = perf_counter()
     raw_data = pack_rgb_data(fit_to_screen_size(matrix))
-    """
-    if width > 1920:
-        pass
-    elif height > 1080:
-        pass
-    elif width != 1920 and height != 1080 and :"""
+    print(f"Packing speed: {perf_counter() - time}")
 
+    
+    time = perf_counter()
     dpg.set_value("matrix_texture", raw_data)
+    print(f"Rendering speed: {perf_counter() - time}")
 
     return id_
 
@@ -279,7 +299,6 @@ def create_database_panel(sender, app_data, user_data):
             dpg.add_table_column()
 
             data = load_catmaps_table()
-            print(data)
             for catmap in data:
                 with dpg.table_row():
                     for param in catmap:
@@ -289,7 +308,10 @@ def create_database_panel(sender, app_data, user_data):
 
 
 def create_pixel_panel():
-    pass
+    
+    while dpg.is_dearpygui_running():
+        x_pos, y_pos = dpg.get_mouse_pos(local = False)
+        print(f"X pos: {x_pos}, Y pos: {y_pos}")
 
 def create_help_panel():
     pass
@@ -316,7 +338,6 @@ def main() -> None:
     dpg.create_context()
     setup()
     raw_data = array.array('f', np.zeros((WIDTH * HEIGHT * 3), dtype=np.float16))
-    print(len(raw_data))
     with dpg.texture_registry():
         dpg.add_raw_texture(
             width=WIDTH,
