@@ -11,7 +11,8 @@ from time import perf_counter
 import math
 
 
-MAX_ITERATIONS = 1000
+PRECISION = 1
+calculate_pixel_movement_on_press = True
 
 def make_njit_func(func_str: str):
     src = f"def f(x, y):\n    return {func_str}"
@@ -20,34 +21,42 @@ def make_njit_func(func_str: str):
     return njit(ns["f"])
 
 @njit
-def periodicity_to_start_gradient(x_init: int, y_init: int, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> int:
+def periodicity_to_start_gradient(x_init: int, y_init: int, 
+                                  x_resolution: int, y_resolution: int, 
+                                  x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher,
+                                  iterations: int) -> int:
     x = x_init
     y = y_init
 
-    for i in range(MAX_ITERATIONS):
+    for i in range(iterations):
         x, y = x_func(x, y) % x_resolution, y_func(x, y) % y_resolution
         if x == x_init and y == y_init:
             return i
     return -1
 
 @njit
-def periodicity_to_start(x_init: int, y_init: int, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> int:
+def periodicity_to_start(x_init: int, y_init: int, 
+                         x_resolution: int, y_resolution: int, 
+                         x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher,
+                         iterations: int) -> int:
     x = x_init
     y = y_init
 
-    for _ in range(MAX_ITERATIONS):
+    for _ in range(iterations):
         x, y = x_func(x, y) % x_resolution, y_func(x, y) % y_resolution
         if x == x_init and y == y_init:
             return 1
     return -1
 
 @njit
-def periodicity_partial_gradient(x: int, y: int, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> int:
+def periodicity_partial_gradient(x: int, y: int, x_resolution: int, y_resolution: int, 
+                                 x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher,
+                                 iterations: int) -> int:
     visited = {}
     state = (x, y)
     visited[state] = 0
 
-    for i in range(1, MAX_ITERATIONS + 1):
+    for i in range(1, iterations + 1):
         x_next = x_func(x, y) % x_resolution
         y_next = y_func(x, y) % y_resolution
         state = (x, y) = (x_next, y_next)
@@ -58,12 +67,14 @@ def periodicity_partial_gradient(x: int, y: int, x_resolution: int, y_resolution
     return -1
 
 @njit
-def periodicity_partial(x: int, y: int, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> int:
+def periodicity_partial(x: int, y: int, x_resolution: int, y_resolution: int, 
+                        x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher,
+                        iterations: int) -> int:
     visited = {}
     state = (x, y)
     visited[state] = 1
 
-    for i in range(1, MAX_ITERATIONS + 1):
+    for i in range(1, iterations + 1):
         x_next = x_func(x, y) % x_resolution
         y_next = y_func(x, y) % y_resolution
         state = (x, y) = (x_next, y_next)
@@ -75,31 +86,46 @@ def periodicity_partial(x: int, y: int, x_resolution: int, y_resolution: int, x_
 
 
 @njit
-def pixel_movement_brute(x: int, y: int, x_resolution: int, y_resolution: int) -> np.ndarray:
+def pixel_movement_brute(x: int, y: int, x_resolution: int, y_resolution: int, 
+                         x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher,
+                         iterations: int) -> int:
     matrix = np.zeros(shape = (x_resolution, y_resolution), dtype=np.int64)
 
-    for _ in range(MAX_ITERATIONS):
+    for _ in range(iterations):
         x, y = (2 * x + y) % x_resolution, (x + y) % y_resolution
         matrix[x, y] += 1
     return matrix
 
 @njit
-def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int) -> np.ndarray:
+def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int, 
+                   x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher,
+                   iterations: int) -> int:
     matrix = np.zeros(shape = (x_resolution, y_resolution), dtype=np.int64)
 
-    for _ in range(MAX_ITERATIONS):
+    for _ in range(iterations):
         x, y = (2 * x + y) % x_resolution, (x + y) % y_resolution
         matrix[x, y] += 1
     return matrix
 
 @njit
-def apply_over_matrix(f: core.registry.CPUDispatcher, x_resolution: int, y_resolution: int, x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher) -> np.ndarray:
+def apply_over_matrix(f: core.registry.CPUDispatcher, x_resolution: int, y_resolution: int, 
+                      x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher, 
+                      segmented: bool = False,
+                      x_min: int = 0, y_min: int = 0, 
+                      x_max: int = 0, y_max: int = 0) -> np.ndarray:
     matrix = np.zeros(shape = (y_resolution, x_resolution), dtype=np.int16)
+    iterations = (min(x_max, x_resolution) - max(0, x_min)) * (min(y_max, y_resolution) - max(0, y_min)) * PRECISION
+    if segmented:
+        for i in range(max(0, x_min), min(x_max, x_resolution)):
+            for j in range(max(0, y_min), min(y_max, y_resolution)):
+                matrix[j, i] = f(i, j, x_resolution, y_resolution, x_func, y_func, iterations)
+        return matrix
+    else:
+        for i in range(x_resolution):
+            for j in range(y_resolution):
+                matrix[j, i] = f(i, j, x_resolution, y_resolution, x_func, y_func, iterations)
+        return matrix
 
-    for i in range(x_resolution):
-        for j in range(y_resolution):
-            matrix[j, i] = f(i, j, x_resolution, y_resolution, x_func, y_func)
-    return matrix
 
 def pack_rgba_data(matrix: np.ndarray):
     raveled_matrix = (matrix / matrix.max()).ravel()
@@ -113,6 +139,7 @@ def pack_rgba_data(matrix: np.ndarray):
 
     return array.array('f', rgba_data)
 
+@njit
 def pack_rgb_data(matrix: np.ndarray):
     raveled_matrix = (matrix / matrix.max() * 255).ravel()
 
@@ -124,17 +151,19 @@ def pack_rgb_data(matrix: np.ndarray):
 
     rgba_data[rgba_data < 0] = 0
 
-    return array.array('f', rgba_data)
+    #return array.array('f', rgba_data)
+    return rgba_data
 
+@njit
 def fit_to_screen_size(matrix: np.ndarray):
-    """
     SCREEN_HEIGHT = 1080
     SCREEN_WIDTH = 1920
 
     matrix_height, matrix_width = matrix.shape
     while True:
         if matrix_height * 2 <= SCREEN_HEIGHT and matrix_width * 2 <= SCREEN_WIDTH:
-            matrix = np.repeat(np.repeat(matrix, 2, axis=1), 2, axis=0)
+            temp_matrix = np.repeat(matrix, repeats=2, axis=1)
+            matrix = np.repeat(temp_matrix, repeats=2, axis=0)
             matrix_height *= 2
             matrix_width *= 2
         elif matrix_height > SCREEN_HEIGHT or matrix_width > SCREEN_WIDTH:
@@ -144,14 +173,13 @@ def fit_to_screen_size(matrix: np.ndarray):
             matrix_width = math.floor(float(matrix_width) / 2)
         else:
             break
-    padded = np.pad(matrix, pad_width=((math.floor((SCREEN_HEIGHT - matrix_height) / 2),  \
-                                        math.ceil((SCREEN_HEIGHT - matrix_height) / 2)), \
-                                       (math.floor((SCREEN_WIDTH - matrix_width) / 2),\
-                                        math.ceil((SCREEN_WIDTH - matrix_width) / 2))),\
+    padded = np.pad(matrix, pad_width=((math.floor((SCREEN_HEIGHT - matrix_height) / 2),\
+                                        math.ceil((SCREEN_HEIGHT - matrix_height) / 2)),\
+                                       (math.floor((SCREEN_WIDTH - matrix_width) / 2),  \
+                                        math.ceil((SCREEN_WIDTH - matrix_width) / 2))), \
                                         mode='constant', constant_values=0)
     
-    return padded"""
-    return matrix
+    return padded
     
 def fetch_image(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode):
     time = perf_counter()
@@ -305,19 +333,23 @@ def create_database_panel(sender, app_data, user_data):
                         dpg.add_text(param)
                     dpg.add_button(label = "Load", callback = update_image, user_data=catmap[1:])
 
-
+def switch_pixel_mode():
+    global calculate_pixel_movement_on_press
+    calculate_pixel_movement_on_press = not calculate_pixel_movement_on_press
 
 def create_pixel_panel():
     
-    while dpg.is_dearpygui_running():
+    while dpg.is_dearpygui_running() and not dpg.is_key_pressed(key=dpg.mvKey_S):
         x_pos, y_pos = dpg.get_mouse_pos(local = False)
         print(f"X pos: {x_pos}, Y pos: {y_pos}")
 
 def create_help_panel():
     pass
-    #dpg.add_button(label = "Open", callback = update_image, user_data=catmap[1:])
 
 def create_legend_panel():
+    pass
+
+def create_zoom_panel():
     pass
 
 def setup():
@@ -327,6 +359,8 @@ def setup():
         dpg.add_key_press_handler(key=dpg.mvKey_X, callback=create_pixel_panel)
         dpg.add_key_press_handler(key=dpg.mvKey_H, callback=create_help_panel)
         dpg.add_key_press_handler(key=dpg.mvKey_C, callback=create_legend_panel)
+        dpg.add_key_press_handler(key=dpg.mvKey_Z, callback=create_zoom_panel)
+        dpg.add_key_press_handler(key=dpg.mvKey_M, callback=switch_pixel_mode)
 
     
 
