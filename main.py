@@ -4,21 +4,49 @@ import array
 import database
 from database import *
 import dearpygui.dearpygui as dpg
-from numba import njit, core
+from numba import njit, core, prange
 import numpy as np
 from PIL import Image
-from time import perf_counter
+from time import perf_counter, sleep
 import math
 
 
-PRECISION = 1
+PRECISION = 0.001
 calculate_pixel_movement_on_press = True
+context = {
+}
 
 def make_njit_func(func_str: str):
     src = f"def f(x, y):\n    return {func_str}"
     ns = {}
     exec(src, ns)
     return njit(ns["f"])
+
+
+def njit_repeat(ndarr: np.ndarray, repeats: int = 1, axis=0):
+    n, m = ndarr.shape
+    if axis == 0:
+        out = np.empty((n * repeats, m), dtype=ndarr.dtype)
+    elif axis == 1:
+        out = np.empty((n, m * repeats), dtype=ndarr.dtype)
+    else:
+        raise ValueError(">2-dimensional arrays not supported by njit_repeat")
+    return njit_repeat_internal(n, m, out, ndarr, repeats, axis)
+
+@njit(parallel = True)
+def njit_repeat_internal(n, m, out, ndarr: np.ndarray, repeats: int = 1, axis=0):
+    if axis == 0:
+        for i in prange(n * repeats):
+            src_row = i // repeats
+            for j in range(m):
+                out[i, j] = ndarr[src_row, j]
+    elif axis == 1:
+        for i in prange(m * repeats):
+            src_col = i // repeats
+            for j in range(n):
+                out[j, i] = ndarr[j, src_col]
+    return out
+
 
 @njit
 def periodicity_to_start_gradient(x_init: int, y_init: int, 
@@ -47,6 +75,7 @@ def periodicity_to_start(x_init: int, y_init: int,
         if x == x_init and y == y_init:
             return 1
     return -1
+
 
 @njit
 def periodicity_partial_gradient(x: int, y: int, x_resolution: int, y_resolution: int, 
@@ -107,21 +136,23 @@ def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int,
         matrix[x, y] += 1
     return matrix
 
-@njit
+
+@njit(parallel = True)
 def apply_over_matrix(f: core.registry.CPUDispatcher, x_resolution: int, y_resolution: int, 
                       x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher, 
                       segmented: bool = False,
                       x_min: int = 0, y_min: int = 0, 
                       x_max: int = 0, y_max: int = 0) -> np.ndarray:
     matrix = np.zeros(shape = (y_resolution, x_resolution), dtype=np.int16)
-    iterations = (min(x_max, x_resolution) - max(0, x_min)) * (min(y_max, y_resolution) - max(0, y_min)) * PRECISION
     if segmented:
-        for i in range(max(0, x_min), min(x_max, x_resolution)):
+        iterations = (min(x_max, x_resolution) - max(0, x_min)) * (min(y_max, y_resolution) - max(0, y_min)) * PRECISION
+        for i in prange(max(0, x_min), min(x_max, x_resolution)):
             for j in range(max(0, y_min), min(y_max, y_resolution)):
                 matrix[j, i] = f(i, j, x_resolution, y_resolution, x_func, y_func, iterations)
         return matrix
     else:
-        for i in range(x_resolution):
+        iterations = x_resolution * y_resolution * PRECISION
+        for i in prange(x_resolution):
             for j in range(y_resolution):
                 matrix[j, i] = f(i, j, x_resolution, y_resolution, x_func, y_func, iterations)
         return matrix
@@ -154,16 +185,17 @@ def pack_rgb_data(matrix: np.ndarray):
     #return array.array('f', rgba_data)
     return rgba_data
 
-@njit
+
 def fit_to_screen_size(matrix: np.ndarray):
     SCREEN_HEIGHT = 1080
     SCREEN_WIDTH = 1920
 
     matrix_height, matrix_width = matrix.shape
+    print(matrix_height, matrix_width)
     while True:
         if matrix_height * 2 <= SCREEN_HEIGHT and matrix_width * 2 <= SCREEN_WIDTH:
-            temp_matrix = np.repeat(matrix, repeats=2, axis=1)
-            matrix = np.repeat(temp_matrix, repeats=2, axis=0)
+            temp_matrix = njit_repeat(matrix, repeats=2, axis=1)
+            matrix = njit_repeat(temp_matrix, repeats=2, axis=0)
             matrix_height *= 2
             matrix_width *= 2
         elif matrix_height > SCREEN_HEIGHT or matrix_width > SCREEN_WIDTH:
@@ -173,14 +205,17 @@ def fit_to_screen_size(matrix: np.ndarray):
             matrix_width = math.floor(float(matrix_width) / 2)
         else:
             break
+    print(matrix.shape, matrix_height, matrix_width)
     padded = np.pad(matrix, pad_width=((math.floor((SCREEN_HEIGHT - matrix_height) / 2),\
                                         math.ceil((SCREEN_HEIGHT - matrix_height) / 2)),\
                                        (math.floor((SCREEN_WIDTH - matrix_width) / 2),  \
                                         math.ceil((SCREEN_WIDTH - matrix_width) / 2))), \
                                         mode='constant', constant_values=0)
+    print(padded.shape)
     
     return padded
-    
+
+
 def fetch_image(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode):
     time = perf_counter()
     id_ = find_catmap_id(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_start, mode)[0]
@@ -189,7 +224,7 @@ def fetch_image(x_resolution, y_resolution, x_func_str, y_func_str, x_start, y_s
     im_frame = Image.open(f"{id_}_{x_resolution}x{y_resolution}.png")
     print(f"Step speed {perf_counter() - time}")
     time = perf_counter()
-    np_frame = np.array(im_frame.getdata(0), dtype=np.float16)
+    np_frame = np.array(im_frame.getdata(0), dtype=np.float32)
     print(f"Step speed {perf_counter() - time}")
     time = perf_counter()
     np_frame = np.reshape(np_frame, (y_resolution, x_resolution))
@@ -244,7 +279,6 @@ def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
 
         return id_, matrix
 
-
 def update_image(sender, app_data, user_data):
     time = perf_counter()
     if user_data:
@@ -281,13 +315,16 @@ def update_image(sender, app_data, user_data):
 
     
     time = perf_counter()
+    print(len(raw_data))
     dpg.set_value("matrix_texture", raw_data)
     print(f"Rendering speed: {perf_counter() - time}")
 
     return id_
 
+
 def test(sender, app_data, user_data):
     print(sender, app_data, user_data)
+
 
 def update_generating_panel(sender, app_data):
     if app_data == "Individual pixel movement":
@@ -311,6 +348,7 @@ def create_generating_panel():
             dpg.add_input_int(label = "Starting Y", default_value=0, tag = "generation y start", width=100)
         dpg.add_checkbox(label="Gradient mode (displays how fast a pixel returns to original position, for example)", default_value=False, tag = "generation gradient")
         dpg.add_button(label="Generate", callback=update_image)
+
 
 def create_database_panel(sender, app_data, user_data):
     with dpg.window(label = "Saved catmaps"):
@@ -340,8 +378,11 @@ def switch_pixel_mode():
 def create_pixel_panel():
     
     while dpg.is_dearpygui_running() and not dpg.is_key_pressed(key=dpg.mvKey_S):
-        x_pos, y_pos = dpg.get_mouse_pos(local = False)
-        print(f"X pos: {x_pos}, Y pos: {y_pos}")
+        if calculate_pixel_movement_on_press and dpg.is_mouse_button_clicked(dpg.mvMouseButton_Left): 
+            sleep(0.05)
+            x_pos, y_pos = dpg.get_mouse_pos(local = False)
+            update_image(None, None, user_data=context)
+            print(f"X pos: {x_pos}, Y pos: {y_pos}")
 
 def create_help_panel():
     pass
@@ -371,7 +412,7 @@ def main() -> None:
 
     dpg.create_context()
     setup()
-    raw_data = array.array('f', np.zeros((WIDTH * HEIGHT * 3), dtype=np.float16))
+    raw_data = array.array('f', np.zeros((WIDTH * HEIGHT * 3), dtype=np.float32))
     with dpg.texture_registry():
         dpg.add_raw_texture(
             width=WIDTH,
