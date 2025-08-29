@@ -13,7 +13,21 @@ import math
 
 PRECISION = 0.001
 calculate_pixel_movement_on_press = True
-context = {
+state = {
+    "mode": MODE.PERIODICITY_TO_START,
+    "gradient": False,
+    "x_resolution": 1920,
+    "y_resolution": 1080,
+    "x_func": "2 * x + y",
+    "y_func": "x + y",
+    "segmented": False,
+    "x_min": None,
+    "y_min": None,
+    "x_max": None,
+    "y_max": None,
+    "x_init": None,
+    "y_init": None,
+    "precision": 0.001
 }
 
 def make_njit_func(func_str: str):
@@ -113,27 +127,22 @@ def periodicity_partial(x: int, y: int, x_resolution: int, y_resolution: int,
         visited[state] = 1
     return -1
 
-
-@njit
-def pixel_movement_brute(x: int, y: int, x_resolution: int, y_resolution: int, 
-                         x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher,
-                         iterations: int) -> int:
-    matrix = np.zeros(shape = (x_resolution, y_resolution), dtype=np.int64)
-
-    for _ in range(iterations):
-        x, y = (2 * x + y) % x_resolution, (x + y) % y_resolution
-        matrix[x, y] += 1
-    return matrix
-
 @njit
 def pixel_movement(x: int, y: int, x_resolution: int, y_resolution: int, 
                    x_func: core.registry.CPUDispatcher, y_func: core.registry.CPUDispatcher,
                    iterations: int) -> int:
     matrix = np.zeros(shape = (x_resolution, y_resolution), dtype=np.int64)
+    matrix[x, y] = 3
 
     for _ in range(iterations):
         x, y = (2 * x + y) % x_resolution, (x + y) % y_resolution
-        matrix[x, y] += 1
+        if matrix[x, y] == 3 or matrix[x, y] == 2:
+            return matrix
+        elif matrix[x, y] == 1:
+            matrix[x, y] = 2
+        else:
+            matrix[x, y] = 1
+        
     return matrix
 
 
@@ -184,7 +193,6 @@ def pack_rgb_data(matrix: np.ndarray):
 
     #return array.array('f', rgba_data)
     return rgba_data
-
 
 def fit_to_screen_size(matrix: np.ndarray):
     SCREEN_HEIGHT = 1080
@@ -280,20 +288,23 @@ def generate_image(x_resolution: int = 1920, y_resolution: int = 1080,
         return id_, matrix
 
 def update_image(sender, app_data, user_data):
+    global PRECISION, state
+
     time = perf_counter()
     if user_data:
         width, height, x_function, y_function, x_start, y_start = user_data[:-1]
         mode = MODE(user_data[-1])
     else:
-        width = dpg.get_value("generation width resolution")
-        height = dpg.get_value("generation height resolution")
-        x_start = dpg.get_value("generation x start")
-        y_start = dpg.get_value("generation y start")
-        x_function = dpg.get_value("generation x function")
-        y_function = dpg.get_value("generation y function")
-        mode = dpg.get_value("generation mode")
-        gradient = dpg.get_value("generation gradient")
+        state["x_resolution"] = width = dpg.get_value("generation width resolution")
+        state["y_resolution"] = height = dpg.get_value("generation height resolution")
+        x_start = state["x_init"] 
+        y_start = state["y_init"] 
+        state["x_func"] = x_function = dpg.get_value("generation x function")
+        state["y_func"] = y_function = dpg.get_value("generation y function")
+        state["gradient"] = gradient = dpg.get_value("generation gradient")
+        state["precision"] = PRECISION = dpg.get_value("generation precision")
 
+        mode = dpg.get_value("generation mode")
         modes = {
             (False, "Periodicity to start"): MODE.PERIODICITY_TO_START,
             (True, "Periodicity to start"): MODE.PERIODICITY_TO_START_GRADIENT,
@@ -303,10 +314,10 @@ def update_image(sender, app_data, user_data):
             (True, "Individual pixel movement"): MODE.PIXEL_MOVEMENT
         }
 
-        mode = modes[(gradient, mode)]
+        state["mode"] = mode = modes[(gradient, mode)]
 
 
-
+    print(state)
     print(f"Setup speed: {perf_counter() - time}")
     id_, matrix = generate_image(width, height, mode, x_start, y_start, x_function, y_function)
     time = perf_counter()
@@ -346,6 +357,7 @@ def create_generating_panel():
         with dpg.group(horizontal=True, tag = "generation pixel movement", show = False):
             dpg.add_input_int(label = "Starting X", default_value=0, tag = "generation x start", width=100)
             dpg.add_input_int(label = "Starting Y", default_value=0, tag = "generation y start", width=100)
+        dpg.add_input_float(label = "Calculation precision", default_value=0.001, tag = "generation precision", width=100)
         dpg.add_checkbox(label="Gradient mode (displays how fast a pixel returns to original position, for example)", default_value=False, tag = "generation gradient")
         dpg.add_button(label="Generate", callback=update_image)
 
@@ -376,13 +388,17 @@ def switch_pixel_mode():
     calculate_pixel_movement_on_press = not calculate_pixel_movement_on_press
 
 def create_pixel_panel():
+    global state
     
     while dpg.is_dearpygui_running() and not dpg.is_key_pressed(key=dpg.mvKey_S):
         if calculate_pixel_movement_on_press and dpg.is_mouse_button_clicked(dpg.mvMouseButton_Left): 
             sleep(0.05)
             x_pos, y_pos = dpg.get_mouse_pos(local = False)
-            update_image(None, None, user_data=context)
             print(f"X pos: {x_pos}, Y pos: {y_pos}")
+            state["x_init"], state["y_init"] = x_pos, y_pos
+            state["mode"] = MODE.PIXEL_MOVEMENT
+            print(state)
+            update_image(None, None, None)
 
 def create_help_panel():
     pass
@@ -443,8 +459,6 @@ def main() -> None:
         dpg.set_item_height(background_window, h)
 
     dpg.set_viewport_resize_callback(lambda s,a: resize_to_viewport())
-
-    #dpg.add_theme_style(dpg.mvStyleVar_WindowBorderSize, 0)
 
     dpg.setup_dearpygui()
     dpg.show_viewport()
